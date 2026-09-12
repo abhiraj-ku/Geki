@@ -16,6 +16,7 @@ const (
 	SSLRequestCode    uint32 = 80877103 // 0x04D2162F
 	GSSENCRequestCode uint32 = 80877104 // 0x04D21630
 	ProtocolVersion30 uint32 = 196608   // 3.0: (3 << 16)
+	MaxPacketLength   uint32 = 16 * 1024 * 1024
 
 	// Message Types
 	MsgTypeAuth            byte = 'R'
@@ -46,6 +47,9 @@ func ReadStartupHandshake(clientConn net.Conn) (*StartupMessage, error) {
 		if length < 8 {
 			return nil, fmt.Errorf("invalid packet length: %d", length)
 		}
+		if length > MaxPacketLength {
+			return nil, fmt.Errorf("packet length %d exceeds maximum %d", length, MaxPacketLength)
+		}
 
 		// 2. Read protocol code / version (4 bytes)
 		var code uint32
@@ -55,7 +59,7 @@ func ReadStartupHandshake(clientConn net.Conn) (*StartupMessage, error) {
 
 		// 3. Handle SSL or GSS probes: reply 'N' to force plain TCP
 		if code == SSLRequestCode || code == GSSENCRequestCode {
-			if _, err := clientConn.Write([]byte{'N'}); err != nil {
+			if err := writeFull(clientConn, []byte{'N'}); err != nil {
 				return nil, fmt.Errorf("failed to write SSL/GSS rejection: %w", err)
 			}
 			continue // Client will now send the real StartupMessage
@@ -73,7 +77,10 @@ func ReadStartupHandshake(clientConn net.Conn) (*StartupMessage, error) {
 		binary.BigEndian.PutUint32(raw[4:8], code)
 		copy(raw[8:], payload)
 
-		params := parseStartupParameters(payload)
+		params, err := parseStartupParameters(payload)
+		if err != nil {
+			return nil, fmt.Errorf("invalid startup parameters: %w", err)
+		}
 
 		return &StartupMessage{
 			ProtocolVersion: code,
@@ -84,20 +91,35 @@ func ReadStartupHandshake(clientConn net.Conn) (*StartupMessage, error) {
 }
 
 // This extracts null-terminated key-value pairs
-func parseStartupParameters(payload []byte) map[string]string {
+func parseStartupParameters(payload []byte) (map[string]string, error) {
 	params := make(map[string]string)
 	parts := bytes.Split(payload, []byte{0})
 
 	// Format: key\0value\0key\0value\0\0
-	for i := 0; i+1 < len(parts); i += 2 {
+	terminator := -1
+	for i, part := range parts {
+		if len(part) == 0 {
+			terminator = i
+			break
+		}
+	}
+	if terminator == -1 || terminator%2 != 0 || terminator+1 >= len(parts) {
+		return nil, fmt.Errorf("missing parameter terminator")
+	}
+	for _, part := range parts[terminator+1:] {
+		if len(part) != 0 {
+			return nil, fmt.Errorf("data after parameter terminator")
+		}
+	}
+	for i := 0; i < terminator; i += 2 {
 		key := string(parts[i])
 		if key == "" {
-			break
+			return nil, fmt.Errorf("empty parameter name")
 		}
 		val := string(parts[i+1])
 		params[key] = val
 	}
-	return params
+	return params, nil
 }
 
 // This reads standard Postgres framing: [1-byte Type][4-byte Length][Payload]
@@ -116,6 +138,9 @@ func ReadMessage(r io.Reader) (byte, []byte, error) {
 	if length < 4 {
 		return 0, nil, fmt.Errorf("invalid message length %d", length)
 	}
+	if length > MaxPacketLength {
+		return 0, nil, fmt.Errorf("message length %d exceeds maximum %d", length, MaxPacketLength)
+	}
 
 	// Payload excludes the 4 length bytes
 	payload := make([]byte, length-4)
@@ -128,6 +153,9 @@ func ReadMessage(r io.Reader) (byte, []byte, error) {
 
 // WriteMessage serializes a standard framed message
 func WriteMessage(w io.Writer, msgType byte, payload []byte) error {
+	if len(payload) > int(MaxPacketLength)-4 {
+		return fmt.Errorf("message payload length %d exceeds maximum %d", len(payload), MaxPacketLength-4)
+	}
 	length := uint32(len(payload) + 4)
 
 	buf := make([]byte, 5+len(payload))
@@ -135,6 +163,21 @@ func WriteMessage(w io.Writer, msgType byte, payload []byte) error {
 	binary.BigEndian.PutUint32(buf[1:5], length)
 	copy(buf[5:], payload)
 
-	_, err := w.Write(buf)
-	return err
+	return writeFull(w, buf)
+}
+
+func writeFull(w io.Writer, buf []byte) error {
+	for len(buf) > 0 {
+		n, err := w.Write(buf)
+		if n > 0 {
+			buf = buf[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
