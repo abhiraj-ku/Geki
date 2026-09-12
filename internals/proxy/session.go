@@ -1,9 +1,11 @@
 package proxy
 
 import (
-	"io"
+	"fmt"
 	"log"
 	"net"
+
+	"github.com/abhiraj-ku/geki/internals/protocol"
 )
 
 // Represents the single client connection to proxy
@@ -27,42 +29,53 @@ func NewSession(clientConn net.Conn, targetAddr string) *Session {
 func (s *Session) Run() {
 	defer s.clientConn.Close()
 
+	// Read and intercept the client handshake request with our
+	startup, err := protocol.ReadStartupHandshake(s.clientConn)
+	if err != nil {
+		log.Printf("[Session %s] Startup error: %v", s.clientConn.RemoteAddr(), err)
+		return
+	}
+
+	// intercepted client's log
+	log.Printf("[Handshake] Client connected: user=%q db=%q app=%q",
+		startup.Parameters["user"],
+		startup.Parameters["database"],
+		startup.Parameters["application_name"],
+	)
+
 	// dial to actual postgres server via tcp conn
 	postgreConn, err := net.Dial("tcp", s.targetAddr)
 	if err != nil {
-		log.Printf("[session] failed to conn to pg server: %w", err)
+		fmt.Printf("[session] failed to conn to pg server: %v", err)
+		return
 
 	}
 	defer postgreConn.Close()
 
 	log.Printf("[Session] Proxying %s <-> %s", s.clientConn.RemoteAddr(), postgreConn.RemoteAddr())
 
-	// error channel to know when one pipe fials or crashes
-	errc := make(chan error, 2)
+	// forward the intercepted message directly to postgres instad of copying via io and spinning gorotoines now
+	if _, err := postgreConn.Write(startup.RawBytes); err != nil {
+		log.Printf("[session] failed to conn to pg server: %v", err)
+		return
+	}
 
-	// Pipe imitates the real client <-> server connection talk
-	// like real client when connected to running instance of pg server via psql
-	// our server will create a new sesion for each client connecting to this proxy server
-	// todo: make custom message buffer for the incoming request , intercept it and then proxy to
-	// logical replicas (read or write based on SELECT or INSERT/UPDATE query)
+	// relay the auth and init pg <-> client
+	if err := s.authReady(postgreConn); err != nil {
+		log.Printf("[session] handshake failed: %v", err)
+		return
 
-	// pipe client -> postgres
-	go func() {
-		// copy the client's "command" to the destination postgres server
-		// as of now we will use psql to connect to pg server
-		// client send something like SELECT NOW();
-		// it will remove this later when we build our custom buffer and message interceptor
-		_, err := io.Copy(postgreConn, s.clientConn)
-		errc <- err
-	}()
+	}
 
-	// pipe postgres -> client
-	go func() {
-		_, err := io.Copy(s.clientConn, postgreConn)
-		errc <- err
-	}()
+	log.Printf("[Session] Handshake complete. Steady state ready.")
 
-	// wait for any one to report something
-	<-errc
-	log.Printf("[Session] Closed %s", s.clientConn.RemoteAddr())
+	// loop on the active queries
+	s.loopIncomingQueries(postgreConn)
+
 }
+
+// Handle the authentication handshake and initialization
+func (s *Session) authReady(pgConn net.Conn) error {}
+
+// contiue loop on active queries
+func (s *Session) loopIncomingQueries(pgConn net.Conn) error {}
