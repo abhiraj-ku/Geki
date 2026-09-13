@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -75,7 +77,95 @@ func (s *Session) Run() {
 }
 
 // Handle the authentication handshake and initialization
-func (s *Session) authReady(pgConn net.Conn) error {}
+func (s *Session) authReady(pgConn net.Conn) error {
+	for {
+		msgTypes, payload, err := protocol.ReadMessage(pgConn)
+		if err != nil {
+			return fmt.Errorf("[session] failed to read messages: %w", err)
+		}
+		switch msgTypes {
+		case protocol.MsgTypeAuth:
+			if len(payload) < 4 {
+				return errors.New("message type malfunctioned")
+			}
+			authType := binary.BigEndian.Uint32(payload[:4])
+			log.Printf("[session-auth] auth challenge from postgres type:%d", authType)
+
+			// forward the challenge to client
+			if err := protocol.WriteMessage(s.clientConn, msgTypes, payload); err != nil {
+				return err
+			}
+
+			// AuthenticationOk (0) completes authentication. For other auth
+			// methods, the client must answer the challenge.
+			if authType != 0 {
+				cType, cPayload, err := protocol.ReadMessage(s.clientConn)
+				if err != nil {
+					return fmt.Errorf("client auth response error: %w", err)
+				}
+				if err := protocol.WriteMessage(pgConn, cType, cPayload); err != nil {
+					return err
+				}
+
+			}
+		case protocol.MsgTypeReadyForQuery:
+			// handshake is officaly finished
+			log.Printf("[handshake] ReadyForQuery recived (status: %c)", payload[0])
+			return protocol.WriteMessage(s.clientConn, msgTypes, payload)
+		case protocol.MsgTypeError:
+			_ = protocol.WriteMessage(s.clientConn, msgTypes, payload)
+			return errors.New("database returned error during handhsake")
+
+		default:
+			if err := protocol.WriteMessage(s.clientConn, msgTypes, payload); err != nil {
+				return err
+			}
+		}
+	}
+}
 
 // contiue loop on active queries
-func (s *Session) loopIncomingQueries(pgConn net.Conn) error {}
+func (s *Session) loopIncomingQueries(pgConn net.Conn) {
+	errc := make(chan error, 2)
+
+	// client -> backend (inspect simple queries)
+	go func() {
+		for {
+			msgtype, payload, err := protocol.ReadMessage(s.clientConn)
+			if err != nil {
+				errc <- err
+				return
+			}
+
+			// intercept simple query (Q)
+			if msgtype == protocol.MsgTypeQuery && len(payload) > 0 {
+				queryString := string(payload[:len(payload)-1]) // drop the trailing null byte
+				log.Printf("[Layer-7 Intercept] SQL: %s", queryString)
+			}
+			if err := protocol.WriteMessage(pgConn, msgtype, payload); err != nil {
+				errc <- err
+				return
+			}
+
+		}
+	}()
+
+	// Backend -> client
+
+	go func() {
+		for {
+			msgtype, payload, err := protocol.ReadMessage(pgConn)
+			if err != nil {
+				errc <- err
+				return
+			}
+			if err := protocol.WriteMessage(s.clientConn, msgtype, payload); err != nil {
+				errc <- err
+				return
+			}
+		}
+
+	}()
+	<-errc
+	log.Printf("[Session] Terminated connection %s", s.clientConn.RemoteAddr())
+}
