@@ -181,3 +181,18 @@ func writeFull(w io.Writer, buf []byte) error {
 	}
 	return nil
 }
+
+// Now we imitate a fake connection to the client (avoding full scram-sha256 clinet from
+// scratch is expensive)
+
+// this function tells the client auth was ok instead of connecting
+func WriteAuthOk(w io.Writer) error {
+	payload := make([]byte, 4)
+	binary.BigEndian.PutUint32(payload, 0)
+	return WriteMessage(w, MsgTypeAuth, payload)
+}
+
+// This tells client the proxy is ready to accept the command
+func ReadyForQuery(w io.Writer, status byte) error {
+	return WriteMessage(w, MsgTypeReadyForQuery, []byte{status})
+}
