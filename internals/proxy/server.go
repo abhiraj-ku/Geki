@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"sync"
+
+	"github.com/abhiraj-ku/geki/internals/pool"
 )
 
 // Proxy server spaws a new Session for each new client
@@ -15,9 +17,10 @@ import (
 // Role of the server is the middleman , accepting connections
 // handing it over to session
 type Server struct {
-	listenAdd  string
-	targetAddr string
-	wg         sync.WaitGroup
+	listenAdd   string
+	targetAddr  string
+	backendPool *pool.Pool
+	wg          sync.WaitGroup
 }
 
 func NewServer(listenAddr, targetAddr string) *Server {
@@ -29,13 +32,19 @@ func NewServer(listenAddr, targetAddr string) *Server {
 
 // starts the TCP listener
 func (s *Server) Start(ctx context.Context) error {
+	// inits the backedn pool with 3 active conns
+	s.backendPool = pool.NewPool(s.targetAddr, 3)
+	if err := s.backendPool.InitDBs(3); err != nil {
+		return err
+	}
+
 	lsn, err := net.Listen("tcp", s.listenAdd)
 	if err != nil {
 		return err
 	}
 	defer lsn.Close()
 
-	log.Printf("[Server] Listening on %s, forwarding to %s", s.listenAdd, s.targetAddr)
+	log.Printf("[Server] Proxy listening on %s", s.listenAdd)
 
 	// Graceful shutdown
 	go func() {
@@ -61,7 +70,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go func(c net.Conn) {
 			defer s.wg.Done()
-			session := NewSession(c, s.targetAddr)
+			session := NewSession(c, s.backendPool)
 			session.Run()
 		}(clientConn)
 

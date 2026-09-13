@@ -35,7 +35,7 @@ func main() {
 
 	// Run this server
 	if err := srv.Start(ctx); err != nil {
-		log.Fatalf("server errror: %w", err)
+		log.Fatalf("server error: %v", err)
 	}
 	srv.Wait()
 	log.Println("shutdown complete...")

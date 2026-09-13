@@ -30,7 +30,7 @@ func (p *Pool) InitDBs(size int) error {
 		}
 		// Here we harcode the startup (defualt postgres user)
 		startupParams := []byte("user\x00postgres\x00database\x00postgres\x00\x00")
-		length := uint32(8 * len(startupParams))
+		length := uint32(8 + len(startupParams))
 
 		startupMsg := make([]byte, length)
 		binary.BigEndian.PutUint32(startupMsg[0:4], length)
