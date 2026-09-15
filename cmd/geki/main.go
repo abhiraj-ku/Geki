@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +11,7 @@ import (
 	"github.com/abhiraj-ku/geki/internals/config"
 	"github.com/abhiraj-ku/geki/internals/proxy"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -28,6 +30,15 @@ func main() {
 		<-sigChan
 		log.Println("\nRecieved shutdown signal. stopping new conn...")
 		cancel()
+	}()
+
+	// setup the prometheus collector endpoint (port: 9090)
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Println("[Metric] exposing prom ednpoint on :9090/metrics")
+		if err := http.ListenAndServe(":9090", nil); err != nil {
+			log.Fatalf("[metrics] fasiled to start prom server: %v", err)
+		}
 	}()
 
 	// instansiate the server

@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/abhiraj-ku/geki/internals/metrics"
 	"github.com/abhiraj-ku/geki/internals/pool"
 	"github.com/abhiraj-ku/geki/internals/protocol"
 )
@@ -39,6 +40,10 @@ func isReadOnly(query string) bool {
 }
 
 func (s *Session) Run() {
+	// Prometheus metric collectors
+	metrics.ActiveClients.Inc()
+	defer metrics.ActiveClients.Dec()
+
 	defer s.clientConn.Close()
 
 	// Read and intercept the client handshake request with our
@@ -94,10 +99,12 @@ func (s *Session) loopQueries() {
 					backendConn = s.replicaPool.Acquire()
 					fromReplica = true
 					log.Printf("[router] -> Replica: %s", queryStr)
+					metrics.QueriesRouted.WithLabelValues("read").Inc()
 				} else {
 					backendConn = s.primaryPool.Acquire()
 					fromReplica = false
 					log.Printf("[router] -> Primary: %s", queryStr)
+					metrics.QueriesRouted.WithLabelValues("write").Inc()
 				}
 			} else {
 				// default to primary for non-simple query protocol messages (Parse, Bind, Execute)
