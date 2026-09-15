@@ -31,7 +31,10 @@ func main() {
 	}()
 
 	// instansiate the server
-	srv := proxy.NewServer(cfg.ListnrAddr, cfg.TargetAddr)
+	// For local development, we pass the same local target address for both
+	// primary and replica. In production, we will have two different
+	// addresses.
+	srv := proxy.NewServer(cfg.ListnrAddr, cfg.TargetAddr, cfg.TargetAddr)
 
 	// Run this server
 	if err := srv.Start(ctx); err != nil {
