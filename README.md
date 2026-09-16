@@ -1,4 +1,6 @@
-![Geki logo](https://drive.google.com/file/d/1pLdfvJ6LvqOqOJl50ev_bN9tBbWXKkGy/view?usp=sharing)
+<p align="center">
+      <img src="./logo/geki.png" alt="Geki logo" width="150">
+</p>
 
 # Geki - PostgreSQL Layer-7 Connection Proxy
 
