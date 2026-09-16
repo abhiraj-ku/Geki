@@ -1,4 +1,8 @@
+![Geki logo](https://drive.google.com/file/d/1pLdfvJ6LvqOqOJl50ev_bN9tBbWXKkGy/view?usp=sharing)
+
 # Geki - PostgreSQL Layer-7 Connection Proxy
+
+
 
 A PostgreSQL connection proxy written in Go that understands the PostgreSQL wire protocol, manages backend connection pools, and automatically routes read queries to replicas and writes to the primary.
 
