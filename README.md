@@ -8,6 +8,11 @@
 
 A PostgreSQL connection proxy written in Go that understands the PostgreSQL wire protocol, manages backend connection pools, and automatically routes read queries to replicas and writes to the primary.
 
+## Demo
+
+[ Watch the Geki demo video](https://video.twimg.com/amplify_video/2100206495799631872/vid/avc1/3360x2100/Qox8HGBMeNcR4ESA.mp4?tag=29)
+
+
 ## Architecture
 
 ```text
